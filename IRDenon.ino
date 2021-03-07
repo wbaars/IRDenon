@@ -7,6 +7,10 @@
 #include <ESP8266HTTPClient.h>
 #include <ESP8266WebServer.h>
 #include "credentials.h"
+#include <PubSubClient.h>
+const char* MQTT_BROKER = "192.168.178.200";
+WiFiClient espClient;
+PubSubClient client(espClient);
 
 IRsend irsend(4); // D2
 
@@ -19,6 +23,8 @@ uint16_t TV[95] = {248, 786,  274, 1822,  250, 810,  250, 788,  248, 814,  244, 
 uint16_t VCR[95] = {252, 786,  252, 1822,  252, 808,  252, 786,  248, 812,  246, 1826,  250, 790,  246, 1850,  246, 1826,  246, 816,  220, 816,  246, 1826,  246, 1854,  244, 790,  246, 792,  244, 43910,  250, 812,  246, 1824,  248, 814,  222, 816,  246, 790,  244, 816,  244, 1828,  246, 790,  246, 816,  246, 1826,  246, 1852,  220, 814,  246, 790,  244, 1852,  244, 1828,  244, 43908,  252, 788,  246, 1848,  248, 790,  246, 814,  220, 816,  246, 1826,  246, 814,  244, 1828,  246, 1826,  246, 816,  246, 790,  246, 1852,  242, 1830,  246, 790,  246, 816,  246};  // DENON 22CC
 uint16_t MUTE[95] = {250, 788,  272, 1822,  250, 810,  250, 788,  248, 814,  220, 814,  246, 790,  246, 814,  246, 790,  246, 1852,  220, 1852,  246, 1828,  246, 1852,  244, 792,  246, 792,  244, 43910,  250, 812,  246, 1802,  270, 814,  220, 816,  246, 792,  244, 1852,  244, 1828,  246, 1828,  244, 1852,  246, 790,  246, 814,  220, 816,  246, 790,  244, 1852,  244, 1828,  246, 43886,  274, 788,  246, 1850,  246, 790,  246, 792,  244, 814,  246, 790,  246, 814,  244, 792,  246, 790,  244, 1852,  246, 1826,  246, 1850,  220, 1852,  246, 790,  246, 816,  244};  // DENON 203C
 uint16_t NIGHT[95] = {278, 786,  252, 786,  250, 1816,  280, 786,  250, 812,  222, 838,  224, 790,  246, 840,  220, 1826,  246, 1854,  220, 840,  222, 790,  246, 1854,  242, 790,  246, 814,  220, 43888,  270, 814,  244, 790,  248, 1826,  246, 840,  222, 790,  246, 1854,  242, 1830,  244, 1826,  246, 816,  244, 790,  246, 1876,  196, 1876,  222, 790,  246, 1852,  244, 1828,  246, 43878,  280, 788,  248, 838,  220, 1826,  248, 814,  222, 840,  222, 790,  244, 840,  220, 792,  246, 1826,  246, 1876,  220, 790,  246, 840,  196, 1854,  244, 790,  246, 840,  220};  // DENON 1064
+uint16_t DENON_DELAY = 100;
+uint16_t DENON_VOL_REPEAT = 4;
 
 ESP8266WebServer server(80);
 
@@ -67,6 +73,12 @@ void send(uint16_t buf[]) {
   digitalWrite(LED_BUILTIN,HIGH);
 }
 
+void sendMulti(uint16_t count, uint16_t buf[]) {
+  for(int i=0;i<count;i++) {
+     send(buf);
+  }
+}
+
 void handleRoot() {
   server.send(200,"text/html",index_html);  
   String btn = server.arg("btnAction");
@@ -74,13 +86,63 @@ void handleRoot() {
   Serial.println(btn);
   if (btn=="PWON") send(PWON);
   if (btn=="PWOFF") send(PWOFF);
-  if (btn=="VOLUP") for(int i=0;i<4;i++) {send(VOLUP);delay(200);}
-  if (btn=="VOLDOWN") for(int i=0;i<4;i++) {send(VOLDOWN);delay(200);}
+  if (btn=="VOLUP") sendMulti(DENON_VOL_REPEAT,VOLUP);
+  if (btn=="VOLDOWN") sendMulti(DENON_VOL_REPEAT,VOLDOWN);
   if (btn=="DVD") send(DVD);
   if (btn=="TV") send(TV);
   if (btn=="VCR") send(VCR);
   if (btn=="MUTE") send(MUTE);
   if (btn=="NIGHT") send(NIGHT);
+}
+
+void mqtt(char* topic, byte* payload, unsigned int length) {
+    Serial.print("Received mqtt [");
+    Serial.print(topic);
+    Serial.print("] ");
+    char msg[length+1];
+    for (int i = 0; i < length; i++) {
+        Serial.print((char)payload[i]);
+        msg[i] = (char)payload[i];
+    }
+    Serial.println();
+ 
+    msg[length] = '\0';
+    Serial.println(msg);
+ 
+    if(strcmp(msg,"on")==0){
+        send(PWON);
+    }
+    else if(strcmp(msg,"off")==0){
+        send(PWOFF);
+    }
+    else if(strcmp(msg,"mute")==0){
+        Serial.println("IR mute");
+        send(MUTE);
+    }
+    else if(strcmp(msg,"volup")==0){
+        Serial.println("IR volup");
+        sendMulti(DENON_VOL_REPEAT,VOLUP);
+    }
+    else if(strcmp(msg,"voldown")==0){
+        Serial.println("IR voldown");
+        sendMulti(DENON_VOL_REPEAT,VOLDOWN);
+    }
+    else if(strcmp(msg,"dvd")==0){
+        Serial.println("IR dvd");
+        sendMulti(DENON_VOL_REPEAT,DVD);
+    }
+    else if(strcmp(msg,"tv")==0){
+        Serial.println("IR tv");
+        sendMulti(DENON_VOL_REPEAT,TV);
+    }
+    else if(strcmp(msg,"vcr")==0){
+        Serial.println("IR vcr");
+        sendMulti(DENON_VOL_REPEAT,VCR);
+    }
+    else if(strcmp(msg,"night")==0){
+        Serial.println("IR night");
+        sendMulti(DENON_VOL_REPEAT,NIGHT);
+    }
 }
 
 void connectWifi() {
@@ -94,6 +156,10 @@ void connectWifi() {
   Serial.println(STASSID);
   Serial.print("IP address: ");
   Serial.println(WiFi.localIP());
+  client.setServer(MQTT_BROKER, 1883);
+  client.setCallback(mqtt);
+  Serial.print("mqtt broker: ");
+  Serial.println(MQTT_BROKER);
 }
 
 void setup() {
@@ -106,6 +172,24 @@ void setup() {
   server.begin();
 }
 
+void reconnect() {
+    while (!client.connected()) {
+        Serial.println("Reconnecting MQTT...");
+        if (!client.connect("ESP-Denon")) {
+            Serial.print("failed, rc=");
+            Serial.print(client.state());
+            Serial.println(" retrying in 5 seconds");
+            delay(5000);
+        }
+    }
+    client.subscribe("/home/denon");
+    Serial.println("MQTT Connected...");
+}
+
 void loop() {
   server.handleClient();
+    if (!client.connected()) {
+        reconnect();
+    }
+    client.loop();
 }
